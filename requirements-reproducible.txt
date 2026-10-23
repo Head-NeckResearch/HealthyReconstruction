@@ -1,0 +1,7 @@
+# Direct dependency versions used for release verification.
+# Python 3.13.3; CPU verification. Transitive dependencies are not locked here.
+setuptools==75.8.2
+numpy==2.2.6
+scipy==1.16.1
+pandas==2.2.3
+torch==2.7.0

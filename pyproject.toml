@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "healthy-reconstruction"
+version = "0.1.0"
+description = "Masked healthy-reference reconstruction and analysis of 3D movement"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26,<3",
+    "scipy>=1.11,<2",
+    "pandas>=2.1,<3",
+    "torch>=2.2,<3",
+]
+
+[project.scripts]
+healthy-reconstruction = "healthy_reconstruction.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

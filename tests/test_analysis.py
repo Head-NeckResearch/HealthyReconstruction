@@ -1,0 +1,205 @@
+"""Analytic tests generated in memory; no study observations are included."""
+
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+import numpy as np
+
+from healthy_reconstruction.analysis import (
+    POLICIES,
+    ScoreRecord,
+    aggregate_regional_takes,
+    aggregate_take_scores,
+    analyze_file,
+    cluster_auc,
+    leave_one_subject_out,
+    pattern_frequencies,
+    regional_summary,
+    side_contrasts,
+    summarize_contrasts,
+    summarize_followup,
+    wilson_interval,
+    within_visit_variability,
+)
+
+
+class AUCTests(unittest.TestCase):
+    @staticmethod
+    def records():
+        # Distinct repeated-visit weights create different session/subject AUCs.
+        values = (("a", "reference", 1, 0), ("b", "reference", 1, 10),
+                  ("c", "comparison", 1, 1), ("c", "comparison", 2, 2),
+                  ("d", "comparison", 1, 20))
+        return [ScoreRecord(p, g, v, "task", (x, 7.0)) for p, g, v, x in values]
+
+    def test_four_estimands_and_ties(self):
+        result = cluster_auc(self.records(), ("varying", "tied"), ("task",), n_bootstrap=32, seed=4)
+        np.testing.assert_allclose(result.estimate[:, 0, 0], [2 / 3, 3 / 4, 3 / 4, 3 / 4])
+        np.testing.assert_allclose(result.estimate[..., 1], 0.5)
+        np.testing.assert_allclose(result.estimate[:, 0], result.estimate[:, 1])
+        self.assertEqual(result.bootstrap.shape, (32, 4, 2, 2))
+        self.assertEqual(result.interval().shape, (2, 4, 2, 2))
+        delta = result.paired_difference("varying", "tied")
+        np.testing.assert_allclose(delta["estimate"], result.estimate[..., 0] - 0.5)
+        np.testing.assert_allclose(delta["interval"], np.quantile(result.bootstrap[..., 0] - 0.5, [.025, .975], axis=0))
+
+    def test_shared_cluster_draws_against_direct_pair_enumeration(self):
+        result = cluster_auc(self.records(), ("varying", "tied"), ("task",), n_bootstrap=40, seed=8)
+        reference_values = ([0.0], [10.0])
+        comparison_values = ([1.0, 2.0], [20.0])
+
+        def pair_auc(x, y):
+            return sum(float(b > a) + .5 * float(b == a) for a in x for b in y) / (len(x) * len(y))
+
+        for draw, (hc, cc) in enumerate(zip(result.reference_draw_counts, result.comparison_draw_counts)):
+            hi = np.repeat(np.arange(2), hc)
+            ci = np.repeat(np.arange(2), cc)
+            for policy_index, policy in enumerate(POLICIES):
+                if policy == "equal_subject_weighted_sessions":
+                    expected = np.mean([pair_auc(reference_values[h], comparison_values[c]) for h in hi for c in ci])
+                else:
+                    hvalues, cvalues = [], []
+                    for h in hi:
+                        a = reference_values[h]
+                        hvalues.extend([np.median(a)] if policy in POLICIES[1:3] else a)
+                    for c in ci:
+                        b = comparison_values[c]
+                        cvalues.extend([np.median(b)] if policy == "participant_median" else [b[0]] if policy == POLICIES[2] else b)
+                    expected = pair_auc(hvalues, cvalues)
+                self.assertAlmostEqual(result.bootstrap[draw, policy_index, 0, 0], expected)
+        duplicate = cluster_auc(self.records(), ("varying", "tied"), ("task",), n_bootstrap=40, seed=8)
+        np.testing.assert_array_equal(result.bootstrap, duplicate.bootstrap)
+
+    def test_joint_rejection_preserves_missing_task_support(self):
+        records = self.records()
+        records += [ScoreRecord("a", "reference", 1, "other", (0., 7.)),
+                    ScoreRecord("c", "comparison", 1, "other", (1., 7.)),
+                    ScoreRecord("c", "comparison", 2, "other", (2., 7.)),
+                    ScoreRecord("d", "comparison", 1, "other", (20., 7.))]
+        result = cluster_auc(records, ("varying", "tied"), ("task", "other"), n_bootstrap=50, seed=2)
+        self.assertTrue((result.reference_draw_counts[:, 0] > 0).all())
+        self.assertTrue(np.isfinite(result.bootstrap).all())
+        np.testing.assert_allclose(result.estimate[:, -1], result.estimate[:, :-1].mean(axis=1))
+
+    def test_score_omission_is_not_retraining(self):
+        omitted = leave_one_subject_out(self.records(), ("varying", "tied"), ("task",))
+        self.assertEqual(len(omitted), 4)
+        without_high_reference = next(r for r in omitted if r["participant_id"] == "b")
+        np.testing.assert_allclose(without_high_reference["estimate"][..., 0], 1.0)
+        single = [ScoreRecord("a", "reference", 1, "task", (0.,)), ScoreRecord("b", "comparison", 1, "task", (1.,))]
+        self.assertTrue(np.isnan(leave_one_subject_out(single, ("method",), ("task",))[0]["estimate"]).all())
+
+    def test_invalid_pairing_is_rejected(self):
+        rows = self.records()
+        with self.assertRaises(ValueError):
+            cluster_auc(rows + rows[:1], ("varying", "tied"), ("task",), n_bootstrap=0)
+        with self.assertRaises(ValueError):
+            cluster_auc(rows, ("varying",), ("task",), n_bootstrap=0)
+        with self.assertRaises(ValueError):
+            cluster_auc(rows, ("varying", "tied"), ("absent",), n_bootstrap=0)
+        np.testing.assert_allclose(aggregate_take_scores(np.array([[0, 8], [2, 3], [10, 4]])), [2, 4])
+        with self.assertRaises(ValueError):
+            aggregate_take_scores(np.array([[1, np.nan]]))
+
+    def test_private_prediction_loader_aggregates_and_excludes_extra_fields(self):
+        rows = self.records()
+        records = []
+        for index, row in enumerate(rows):
+            records.append({"sample_id": f"generated_{index}", "participant_id": row.participant_id,
+                            "group": row.group, "visit_index": row.visit_index, "task": row.task,
+                            "scores": dict(zip(("varying", "tied"), row.scores)),
+                            "extra_field": "must_not_be_forwarded"})
+        # A second generated take changes the per-unit median before AUC.
+        records.append({**records[0], "sample_id": "another_generated_take", "scores": {"varying": 2., "tied": 7.}})
+        payload = {"schema_version": 1, "methods": ["varying", "tied"], "records": records}
+        with tempfile.TemporaryDirectory() as directory:
+            source, destination = Path(directory) / "private_input.json", Path(directory) / "private_report.json"
+            source.write_text(json.dumps(payload), encoding="utf-8")
+            before = source.read_bytes()
+            result = analyze_file(source, destination, iterations=16, seed=1,
+                                  reference_group="reference", comparison_group="comparison")
+            self.assertEqual(before, source.read_bytes())
+            self.assertEqual(result, json.loads(destination.read_text(encoding="utf-8")))
+            self.assertNotIn("must_not_be_forwarded", destination.read_text(encoding="utf-8"))
+            self.assertEqual(result["bootstrap"]["iterations"], 16)
+            self.assertEqual(result["ordinal_followup"]["status"], "complete_task_visits")
+            with self.assertRaises(ValueError):
+                analyze_file(source, source, iterations=0)
+            payload["records"].append(records[0])
+            source.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                analyze_file(source, destination, iterations=0)
+
+
+class FollowupTests(unittest.TestCase):
+    def test_task_balanced_endpoints_use_ordinal_visits(self):
+        rows = [ScoreRecord("local", "comparison", v, t, (s,)) for v, a, b in [(1, 2., 8.), (3, 4., 4.), (5, 5., 3.)] for t, s in [("one", a), ("two", b)]]
+        result = summarize_followup(reversed(rows), ("method",), ("one", "two"))
+        np.testing.assert_allclose([x["global_score"][0] for x in result["visits"]], [5, 4, 4])
+        endpoint = result["endpoints"][0]
+        self.assertEqual(endpoint["n_visits"], 3)
+        self.assertEqual(endpoint["first_visit_index"], 1)
+        self.assertEqual(endpoint["last_visit_index"], 5)
+        np.testing.assert_allclose(endpoint["task_delta"][:, 0], [3, -5])
+        np.testing.assert_allclose(endpoint["global_delta"], [-1])
+        np.testing.assert_allclose(endpoint["global_delta_percent"], [-20])
+        np.testing.assert_array_equal(endpoint["n_tasks_smaller"], [1])
+        with self.assertRaises(ValueError):
+            summarize_followup(rows[1:], ("method",), ("one", "two"))
+
+    def test_repetition_iqr_is_not_between_visit_repeatability(self):
+        values = {("local", 1, "task"): np.array([[0.], [2.], [4.], [6.]]), ("local", 2, "task"): np.array([[3.]])}
+        output = within_visit_variability(values)
+        self.assertEqual(output[0]["n_takes"], 4)
+        np.testing.assert_allclose(output[0]["median"], [3.])
+        np.testing.assert_allclose(output[0]["iqr"], [3.])
+        self.assertTrue(np.isnan(output[1]["iqr"]).all())
+
+
+class RegionalPatternTests(unittest.TestCase):
+    def test_nested_finite_means_and_full_grid_coverage(self):
+        values = np.array([[0., np.nan], [2., np.nan], [4., 8.]])
+        before = values.copy()
+        result = regional_summary({"counter_direction": values}, [0, 1])["counter_direction"]
+        self.assertAlmostEqual(result["value"], 5.)
+        self.assertAlmostEqual(result["coverage"], 4 / 6)
+        np.testing.assert_array_equal(values, before)
+        unavailable = regional_summary({"metric": np.full((2, 2), np.nan)}, [0])["metric"]
+        self.assertTrue(np.isnan(unavailable["value"]))
+        self.assertEqual(unavailable["coverage"], 0.)
+        aggregated = aggregate_regional_takes([{"metric": {"value": v, "coverage": c}} for v, c in [(0, .2), (1, .3), (9, .7)]])
+        self.assertEqual(aggregated["metric"], {"value": 1., "coverage": .3})
+        with self.assertRaises(ValueError):
+            regional_summary({"metric": values}, [0, 0])
+
+    def test_pair_within_visit_before_participant_median(self):
+        contrasts = []
+        for visit, a, b in [(1, 0., 0.), (2, 10., 9.), (3, 11., 100.)]:
+            left = dict.fromkeys(("reduced_movement", "counter_direction", "excess_movement"), a)
+            right = dict.fromkeys(left, b)
+            contrasts.append((visit, side_contrasts(left, right)))
+        summary = summarize_contrasts(list(reversed(contrasts)))
+        self.assertEqual(summary["participant_median"]["reduced_movement"], 0.)
+        self.assertEqual(summary["earliest_visit"]["reduced_movement"], 0.)
+        self.assertEqual(contrasts[2][1]["excess_movement"], 89.)
+        missing = summarize_contrasts([(1, {"metric": np.nan}), (2, {"metric": 2.})], metrics=("metric",))
+        self.assertTrue(np.isnan(missing["earliest_visit"]["metric"]))
+        self.assertEqual(missing["participant_median"]["metric"], 2.)
+
+    def test_missing_and_margin_eligibility_are_distinct(self):
+        values = np.array([[.1, .02, .3], [.2, np.nan, .4], [0., .05, .1]])
+        result = pattern_frequencies(values, margin=0.)
+        self.assertEqual(result["counter_direction"]["n_eligible"], 2)
+        self.assertEqual(result["all_metrics"]["n_eligible"], 2)
+        self.assertEqual(result["all_metrics"]["n_supporting"], 1)
+        self.assertEqual(pattern_frequencies(values, margin=.05)["counter_direction"]["n_supporting"], 0)
+        low, high = wilson_interval(0, 1)
+        self.assertAlmostEqual(low, 0., places=12)
+        self.assertGreater(high, .5)
+        self.assertTrue(np.isnan(wilson_interval(0, 0)).all())
+
+
+if __name__ == "__main__":
+    unittest.main()
