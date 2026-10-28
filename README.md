@@ -16,9 +16,6 @@ The workflow addresses three questions:
 3. **Follow-up:** summarize AE residuals globally and by task across visits,
    together with available within-visit take variation.
 
-Counter-direction uses 1-mm amplitude for both observed and reconstructed displacement. Pattern counts use a fixed
-`1e-6`-mm numerical tie tolerance.
-
 ## What is included
 
 Source code, a paper-method configuration, analytical tests, and a generated-input
