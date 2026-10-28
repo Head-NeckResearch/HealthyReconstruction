@@ -15,7 +15,6 @@ from healthy_reconstruction.analysis import (
     aggregate_take_scores,
     analyze_file,
     cluster_auc,
-    leave_one_subject_out,
     pattern_frequencies,
     regional_summary,
     side_contrasts,
@@ -84,14 +83,6 @@ class AUCTests(unittest.TestCase):
         self.assertTrue(np.isfinite(result.bootstrap).all())
         np.testing.assert_allclose(result.estimate[:, -1], result.estimate[:, :-1].mean(axis=1))
 
-    def test_score_omission_is_not_retraining(self):
-        omitted = leave_one_subject_out(self.records(), ("varying", "tied"), ("task",))
-        self.assertEqual(len(omitted), 4)
-        without_high_reference = next(r for r in omitted if r["participant_id"] == "b")
-        np.testing.assert_allclose(without_high_reference["estimate"][..., 0], 1.0)
-        single = [ScoreRecord("a", "reference", 1, "task", (0.,)), ScoreRecord("b", "comparison", 1, "task", (1.,))]
-        self.assertTrue(np.isnan(leave_one_subject_out(single, ("method",), ("task",))[0]["estimate"]).all())
-
     def test_invalid_pairing_is_rejected(self):
         rows = self.records()
         with self.assertRaises(ValueError):
@@ -129,6 +120,7 @@ class AUCTests(unittest.TestCase):
             self.assertEqual(result, json.loads(destination.read_text(encoding="utf-8")))
             self.assertNotIn("must_not_be_forwarded", destination.read_text(encoding="utf-8"))
             self.assertEqual(result["bootstrap"]["iterations"], 16)
+            self.assertNotIn("score_omission",result)
             self.assertEqual(result["ordinal_followup"]["status"], "complete_task_visits")
             self.assertEqual(result["methods"],["tied","ae"])
             self.assertEqual(np.asarray(result["auc_estimate"]).shape,(4,2,2))

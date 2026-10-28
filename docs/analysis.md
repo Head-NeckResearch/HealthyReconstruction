@@ -31,8 +31,7 @@ the functions do not infer physical units or convert them.
 `analyze_file(scores_path, output_path, iterations=5000, seed=0, tasks=None, ...)`
 reads the private prediction command's JSON envelope (`schema_version`, `methods`,
 `records`). It validates unique take identifiers, aggregates take medians, and
-writes a private report containing the AUC analyses and score-omission diagnostic
-for all methods. Ordinal follow-up and repetition variation select the `ae` column
+writes a private report containing the AUC analyses for all methods. Ordinal follow-up and repetition variation select the `ae` column
 only, matching the paper's descriptive analyses. It does not forward extra input
 fields. Set both group names to the values used by the private input. Methods
 follow the declared header; task order defaults to first appearance unless
@@ -87,11 +86,6 @@ Participant order is first appearance in the supplied records. This order affect
 the exact seeded random draws, though it does not affect the point estimate.
 Supply explicit task/method order and seed for reproducibility. The default
 number of draws is a computation setting, not a statement about cohort size.
-
-`leave_one_subject_out` deletes each participant's frozen scores in turn. It does
-**not** retrain a model or perform model-validation cross-validation. Unsupported
-task estimates and their macro-average become NaN. Returned individual labels and
-estimates are private and should not be committed.
 
 ## RQ2: regional patterns and fixed amplitude eligibility
 

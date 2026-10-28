@@ -223,28 +223,6 @@ def cluster_auc(
     return AUCResult(POLICIES, tasks + ("macro_mean",), methods, points, bootstrap, hcounts, ccounts, confidence)
 
 
-def leave_one_subject_out(
-    records: Iterable[ScoreRecord], methods: Sequence[str], tasks: Sequence[str], *,
-    reference_group: str = "reference", comparison_group: str = "comparison",
-) -> list[dict]:
-    """Omit each participant's scores; never refit or retrain a model.
-
-    Each returned estimate has policy/task/method axes including macro_mean.
-    Unsupported task estimates and their macro-average remain NaN.
-    """
-    methods, tasks, ids, kernels, hsupports, csupports = _prepare(records, methods, tasks, reference_group, comparison_group)
-    nh, nc = len(ids[reference_group]), len(ids[comparison_group])
-    full = np.stack([_estimate(np.ones((1, nh)), np.ones((1, nc)), k, hs, cs)[0] for k, hs, cs in zip(kernels, hsupports, csupports)])
-    output = []
-    for group in (reference_group, comparison_group):
-        for index, participant in enumerate(ids[group]):
-            hc, cc = np.ones((1, nh)), np.ones((1, nc))
-            (hc if group == reference_group else cc)[0, index] = 0
-            estimate = np.stack([_estimate(hc, cc, k, hs, cs)[0] for k, hs, cs in zip(kernels, hsupports, csupports)])
-            output.append({"participant_id": participant, "group": group, "estimate": estimate, "change_from_full": estimate - full})
-    return output
-
-
 def summarize_followup(records: Iterable[ScoreRecord], methods: Sequence[str], tasks: Sequence[str]) -> dict[str, list[dict]]:
     """Task-balanced visit scores and ordinal first/last changes.
 
@@ -460,7 +438,6 @@ def analyze_file(
         "auc_estimate": auc.estimate,
         "auc_interval": auc.interval() if iterations else None,
         "paired_method_differences": paired,
-        "score_omission": leave_one_subject_out(records, methods, tasks, reference_group=reference_group, comparison_group=comparison_group),
         "ordinal_followup": followup,
         "within_visit_take_variability": variability,
         "regional_patterns": {"status": "not_computed_from_scores", "methods": ("ae",), "reason": "Use regional_summary and side_contrasts on private AE maps with explicit local region/side assignments."},

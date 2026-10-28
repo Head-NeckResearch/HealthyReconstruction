@@ -21,7 +21,7 @@ The implementation was traced through these original source modules:
 - `evaluate_reviewed_pipeline.py` and `tbme_ae_article_revision.py`: prediction
   assembly, evaluation support, residuals, and regional displacement maps.
 - The follow-up, regional-pattern, and aggregation-sensitivity analysis code:
-  participant-cluster uncertainty, score influence, side contrasts, and ordinal
+  participant-cluster uncertainty, side contrasts, and ordinal
   longitudinal summaries.
 
 The article's final reference is the decoded neutral geometry plus decoded
