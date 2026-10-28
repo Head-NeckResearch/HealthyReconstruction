@@ -16,10 +16,8 @@ The workflow addresses three questions:
 3. **Follow-up:** summarize AE residuals globally and by task across visits,
    together with available within-visit take variation.
 
-Counter-direction uses the original **fixed 1-mm amplitude eligibility rule**
-for both observed and reconstructed displacement. Pattern counts use a fixed
-`1e-6`-mm numerical tie tolerance. The release contains no alternative-floor
-sweep or additional side-contrast margin analysis.
+Counter-direction uses 1-mm amplitude for both observed and reconstructed displacement. Pattern counts use a fixed
+`1e-6`-mm numerical tie tolerance.
 
 ## What is included
 
