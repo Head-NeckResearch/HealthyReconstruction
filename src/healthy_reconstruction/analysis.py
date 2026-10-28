@@ -24,6 +24,7 @@ POLICIES = (
     "equal_subject_weighted_sessions",
 )
 PATTERN_METRICS = ("reduced_movement", "counter_direction", "excess_movement")
+NUMERICAL_TIE_TOLERANCE_MM = 1e-6
 
 
 @dataclass(frozen=True)
@@ -370,23 +371,21 @@ def wilson_interval(k: int, n: int, confidence: float = 0.95) -> tuple[float, fl
     return float(center - half), float(center + half)
 
 
-def pattern_frequencies(contrasts: np.ndarray, *, metrics: Sequence[str] = PATTERN_METRICS, margin: float = 1e-6, confidence: float = 0.95) -> dict[str, dict]:
+def pattern_frequencies(contrasts: np.ndarray, *, metrics: Sequence[str] = PATTERN_METRICS, confidence: float = 0.95) -> dict[str, dict]:
     """Per-metric and joint support among eligible participant contrasts.
 
     Rows are participants and columns follow metrics. Strictly greater than
-    ``margin`` supports the ordering; missing descriptors are never zeros.
-    A margin is descriptive and has no implied clinical or error threshold.
+    the fixed numerical tie tolerance supports the ordering. Absolute contrasts
+    up to 1e-6 mm are numerical ties; missing descriptors are never zeros.
     """
     values, metrics = np.asarray(contrasts, float), tuple(metrics)
     if values.ndim != 2 or values.shape[1] != len(metrics) or not metrics or len(set(metrics)) != len(metrics) or "all_metrics" in metrics:
         raise ValueError("Expected (participants, unique metrics) array")
-    if not np.isfinite(margin) or margin < 0:
-        raise ValueError("margin must be finite and nonnegative")
     output = {}
     for index, metric in enumerate(metrics + ("all_metrics",)):
         a = values if metric == "all_metrics" else values[:, index:index + 1]
         eligible = np.isfinite(a).all(axis=1)
-        supporting = eligible & (a > margin).all(axis=1)
+        supporting = eligible & (a > NUMERICAL_TIE_TOLERANCE_MM).all(axis=1)
         n, k = int(eligible.sum()), int(supporting.sum())
         output[metric] = {"n_eligible": n, "n_supporting": k, "fraction": k / n if n else float("nan"), "wilson_interval": wilson_interval(k, n, confidence)}
     return output
@@ -403,7 +402,9 @@ def analyze_file(
     Every take record supplies sample_id, participant_id, group, visit_index,
     task, and a scores mapping with exactly the declared methods. Participant
     order is first appearance. Task order is explicit or first appearance.
-    Extra input fields are ignored and never forwarded to the report.
+    Cohort analyses retain every declared method. Follow-up and within-visit
+    variability use only the required ``ae`` method. Extra input fields are
+    ignored and never forwarded to the report.
     """
     source, destination = Path(scores_path).resolve(), Path(output_path).resolve()
     if source == destination:
@@ -414,6 +415,9 @@ def analyze_file(
     methods = tuple(payload["methods"])
     if not methods or len(set(methods)) != len(methods) or any(not isinstance(m, str) or not m for m in methods):
         raise ValueError("methods must be a nonempty list of unique strings")
+    if "ae" not in methods:
+        raise ValueError("The paper analysis requires the ae score method")
+    ae_index = methods.index("ae")
     takes, sample_ids, task_order = defaultdict(list), set(), []
     for row in payload["records"]:
         sample = row["sample_id"]
@@ -433,15 +437,21 @@ def analyze_file(
     for i, method_a in enumerate(methods):
         for method_b in methods[i + 1:]:
             paired.append({"method_a": method_a, "method_b": method_b, **auc.paired_difference(method_a, method_b)})
-    comparison_records = [r for r in records if r.group == comparison_group]
+    comparison_records = [ScoreRecord(r.participant_id, r.group, r.visit_index,
+                                     r.task, (r.scores[ae_index],))
+                          for r in records if r.group == comparison_group]
     visit_tasks = defaultdict(set)
     for row in comparison_records:
         visit_tasks[(row.participant_id, row.visit_index)].add(row.task)
     if all(values == set(tasks) for values in visit_tasks.values()):
-        followup = {"status": "complete_task_visits", **summarize_followup(comparison_records, methods, tasks)}
+        followup = {"status": "complete_task_visits", "methods": ("ae",),
+                    **summarize_followup(comparison_records, ("ae",), tasks)}
     else:
-        followup = {"status": "unavailable", "reason": "At least one comparison visit lacks a declared task; no changing-task global means or endpoints were calculated."}
-    variability = within_visit_variability({(p, v, t): np.asarray(a, float) for (p, g, v, t), a in takes.items() if g == comparison_group})
+        followup = {"status": "unavailable", "methods": ("ae",), "reason": "At least one comparison visit lacks a declared task; no changing-task global means or endpoints were calculated."}
+    variability = within_visit_variability({(p, v, t): np.asarray(a, float)[:, ae_index:ae_index + 1]
+                                           for (p, g, v, t), a in takes.items() if g == comparison_group})
+    for row in variability:
+        row["method"] = "ae"
     result = {
         "schema_version": 1,
         "scope": "Private frozen-score analysis; no model refitting, clinical inference, or elapsed-time interpretation",
@@ -453,7 +463,7 @@ def analyze_file(
         "score_omission": leave_one_subject_out(records, methods, tasks, reference_group=reference_group, comparison_group=comparison_group),
         "ordinal_followup": followup,
         "within_visit_take_variability": variability,
-        "regional_patterns": {"status": "not_computed_from_scores", "reason": "Use regional_summary and side_contrasts on private maps with explicit local region/side assignments."},
+        "regional_patterns": {"status": "not_computed_from_scores", "methods": ("ae",), "reason": "Use regional_summary and side_contrasts on private AE maps with explicit local region/side assignments."},
     }
 
     def serializable(value):

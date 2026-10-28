@@ -1,38 +1,53 @@
 # HealthyReconstruction
 
-Code for healthy-reference reconstruction and quantitative analysis of 3D facial
-movement. A masked static autoencoder estimates resting geometry, and
-task-specific temporal autoencoders estimate displacement trajectories. The
-reference is their direct sum. Statistical references and branch ablations use
-the same evaluation support.
+Healthy-trained autoencoder reconstruction for descriptive quantification of
+three-dimensional facial movement. A static AE reconstructs neutral morphology,
+and task-specific temporal AEs reconstruct displacement sequences. Their sum is
+the learned reference used to describe geometric deviations in millimeters.
 
-The analysis module includes regional excursion/direction descriptors,
-participant-cluster bootstrap comparisons, aggregation sensitivity, participant
-score influence, and descriptions across repeated visits.
+The workflow addresses three questions:
 
-**This is a code-only release. No recordings, participant metadata, clinical
-records, derived study tables, fitted templates, normalization arrays, or trained
-weights are distributed.** The public demonstration creates artificial inputs
-from mathematical functions and a random seed at execution time.
+1. **Cohort separation:** compare AE residuals with statistical references and
+   branch ablations, using shared participant-bootstrap draws and alternative
+   participant/visit aggregation policies.
+2. **Regional movement:** describe excess, reduced and counter-direction
+   displacement relative to the AE reconstruction, with coverage and paired
+   side contrasts.
+3. **Follow-up:** summarize AE residuals globally and by task across visits,
+   together with available within-visit take variation.
+
+Counter-direction uses the original **fixed 1-mm amplitude eligibility rule**
+for both observed and reconstructed displacement. Pattern counts use a fixed
+`1e-6`-mm numerical tie tolerance. The release contains no alternative-floor
+sweep or additional side-contrast margin analysis.
+
+## What is included
+
+Source code, a paper-method configuration, analytical tests, and a generated-input
+smoke demonstration. **No recordings, participant metadata, clinical records,
+derived study tables, fitted templates, normalization arrays or trained weights
+are distributed.** All generated outputs remain local and ignored by Git.
+
+The reference is a model estimate learned from healthy observations. The software
+provides descriptive geometric measurements; it is not a validated clinical
+severity scale or a measure of treatment effectiveness.
 
 ## Install
 
-The release was verified with Python 3.13.3 on Linux using CPU execution. Create
-a virtual environment, activate it, then install:
+The reference environment is Python 3.13.3 on Linux. In an activated virtual or
+Conda environment, install the verified direct dependency versions and package:
 
 ```bash
 python -m pip install -r requirements-reproducible.txt
 python -m pip install --no-deps -e .
 ```
 
-The requirements file pins the verified direct dependencies. An existing
-compatible environment can instead install the package with
-`python -m pip install -e .`. Other Python/library/hardware combinations have
-not been verified by this release.
+Alternatively, `python -m pip install -e .` uses the supported dependency ranges.
+Other library and hardware combinations may produce different results.
 
-## Run without participant data
+## Try the workflow without participant data
 
-Choose a fresh local output directory:
+Use a fresh output directory:
 
 ```bash
 healthy-reconstruction demo --output private/synthetic-demo --epochs 2 --tasks 5
@@ -40,19 +55,16 @@ healthy-reconstruction analyze --scores private/synthetic-demo/results/scores.js
 python -m unittest discover -s tests -v
 ```
 
-The demonstration prepares generated point lattices, trains both branches,
-predicts all comparison methods, and writes a smoke-test summary. It uses small
-networks, short training, and fewer registration trials to exercise the workflow
-quickly. It is an implementation check and provides no evidence of clinical
-performance. Its inputs and outputs remain local and ignored by Git.
+The demo generates mathematical point lattices at execution time, trains small
+networks briefly, and exercises preparation, reconstruction and analysis. It
+checks implementation behavior and makes no claim about clinical performance.
 
-## Run with authorized private inputs
+## Run with authorized private recordings
 
-Convert authorized recordings locally to the numerical input format described
-in [input_format.md](docs/input_format.md). Supply new opaque participant/sample
-tokens, explicit optimization/validation/evaluation assignments, selected resting
-frames, and any private acquisition decisions. The manifest schema rejects
-additional fields such as names, initials, calendar dates, or clinical history.
+Prepare local numerical inputs as described in [the input format](docs/input_format.md).
+Supply opaque participant/sample tokens, explicit development/evaluation splits,
+reviewed resting frames and acquisition decisions. The manifest rejects extra
+fields such as names, calendar dates and clinical histories.
 
 ```bash
 healthy-reconstruction prepare --manifest private/manifest.json --output private/prepared --config config/paper.example.json
@@ -61,50 +73,52 @@ healthy-reconstruction predict --dataset private/prepared --models private/model
 healthy-reconstruction analyze --scores private/results/scores.json --output private/analysis.json --iterations 5000 --seed 0
 ```
 
-Use fresh output directories; existing preparation, training, and prediction
-directories are protected against accidental overwrite. The paper configuration
-contains methodological settings and no participant assignments. Reconstruction
-uses raw decoded branches without input blending or temporal-loss regularization.
-GPU execution can be selected in a private configuration and at prediction time.
+Preparation, training and prediction protect existing output directories against
+overwrite. The configuration preserves the original architecture, denoising,
+early stopping and direct decoded reconstruction, without inference-time input
+blending or temporal derivative-loss regularization.
 
-## Reproducibility and interpretation
+All five residual methods are retained for the cohort-separation experiment.
+Regional map outputs and the file-based follow-up/within-visit reports use AE
+only. `analyze` requires an `ae` score column for those reports; generic
+benchmark-only score vectors can be compared using the `cluster_auc` helper. Counter-direction eligibility remains
+fixed at 1 mm, and nonmatching or obsolete multi-floor configurations are rejected.
 
-- [Methods](docs/methods.md): preprocessing, validity masks, model fitting, and
-  inference conventions.
-- [Input format](docs/input_format.md): local numerical arrays, ordinal visits,
-  opaque manifests, template selection, and alignment seed overrides.
-- [Analysis](docs/analysis.md): score aggregation, shared bootstrap draws,
-  regional contrasts, and follow-up calculations.
-- [Provenance](docs/provenance.md): original algorithm sources, portable
-  adaptations, dependency versions, and limits on exact reproduction.
-- [Privacy](docs/privacy.md): the publication boundary and release audit gate.
+## Methods and reproducibility
 
-Exact manuscript values require the protected dataset, original manual decisions,
-private splits, and reference inputs. They cannot be reproduced from the public
-repository alone. The synthetic route and analytical tests reproduce software
-behavior without those inputs. Scores describe geometric departures from an
-estimated reference; they are not clinical grades or validated treatment effects.
+- [Methods](docs/methods.md): preprocessing, support masks, architecture,
+  training, reconstruction and fixed-rule descriptors.
+- [Input format](docs/input_format.md): numerical arrays, opaque manifests,
+  resting-frame selection and explicit local assignments.
+- [Analysis](docs/analysis.md): participant-level AUC uncertainty, regional
+  patterns and AE-only follow-up calculations.
+- [Provenance](docs/provenance.md): source adaptations and reproducibility limits.
+- [Privacy](docs/privacy.md): code-release boundary and audit procedure.
+
+Exact article values require the protected recordings, original manual decisions,
+private assignments and fitted inputs. They cannot be reproduced from this
+code-only repository alone. Generated-input tests verify software behavior.
 
 ## Data availability
 
-The original dataset is protected under French law. Sharing requires prior
-approval from the hospital committee, which has not been obtained. The dataset
-cannot currently be shared and is not provided by this repository.
+The original dataset is protected under French law and cannot currently be
+shared without hospital committee approval, which has not been obtained. This
+repository does not distribute that dataset or grant a dataset license.
 
-## Release checks
+## Release verification
 
-Stage reviewed source changes, then run the fail-closed file/privacy audit:
+After staging reviewed source changes, run:
 
 ```bash
 python tools/audit_release.py --staged
+python -m unittest discover -s tests -v
 ```
 
-The initial publication was additionally reviewed using a private identifier
-dictionary kept outside the repository. The test suite runs source checks
-and generated-input tests without access to the dataset. Automated scans
-supplement manual review; keep all locally generated results private.
+The audit checks the staged source files and rejects unexpected artifacts or
+potentially sensitive content. Automated checks supplement manual review; keep
+all private inputs and generated results outside the published file set.
 
 ## License
 
-The repository owner has not yet specified a software license. Contact the
-owner through GitHub regarding reuse. No dataset license is granted.
+The repository owner has not specified a software license. Contact the owner
+through GitHub regarding reuse. No license to the protected dataset is granted.

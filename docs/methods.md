@@ -76,7 +76,8 @@ motion, `N_AE + X_AE`. Both identity and mean-motion blending coefficients are
 zero. Earlier production experiments used blends, but those are not the final
 article estimator and are not enabled by this release.
 
-The comparators preserve the final article equations: observed neutral plus the
+For the cohort-separation experiment, the comparators preserve the final article
+equations: observed neutral plus the
 same decoded motion (without static projection), decoded neutral plus observed
 motion (without temporal projection), healthy mean neutral plus healthy mean
 motion, and target neutral plus healthy mean motion. The temporal ablation is a
@@ -95,10 +96,13 @@ The geometric map code preserves the study equations: absolute trajectory
 error, reduced displacement amplitude, excess displacement amplitude, and
 positive counterdirection component. Each trajectory uses its own neutral
 origin. Direction is available only where observed and reference displacement
-norms meet the configured floor, 1 mm by default, with 0.5 and 2 mm sensitivity
-settings. Missing direction support is not interpreted as normal movement. No
+norms both meet the fixed 1-mm amplitude eligibility floor. Alternate floors
+are not part of this release. Missing direction support is not interpreted as normal movement. No
 marker side map or affected-side label is embedded; authorized callers can
-provide generic marker-index groups to the independent regional reducers.
+provide generic marker-index groups to the independent regional reducers. Only
+AE maps are emitted by the prediction workflow, while comparator residuals remain
+available for cohort separation. Side-pattern frequencies use the fixed `1e-6`-mm
+numerical tie tolerance, without additional contrast-margin probes.
 
 ## Adaptation provenance and limits
 

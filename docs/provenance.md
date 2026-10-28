@@ -25,7 +25,10 @@ The implementation was traced through these original source modules:
   longitudinal summaries.
 
 The article's final reference is the decoded neutral geometry plus decoded
-movement displacement. Historical input-blending options in earlier scripts
+movement displacement. The descriptive workflow uses the original fixed 1-mm
+direction eligibility rule and numerical tie tolerance; regional maps and
+file-based follow-up use AE only. Statistical references and ablations support
+the cohort-separation experiment. Historical input-blending options in earlier scripts
 are not part of this release's reference definition. Temporal derivative
 regularization is disabled in the article configuration.
 

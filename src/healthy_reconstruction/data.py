@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 from .geometry import world_to_dental, fixed_rot_xyz, robust_registration, active_window_from_energy
 from .preprocessing import anchored_representation, displacement_energy_from_neutral
+from .settings import validate_direction_rule
 
 ROLES = ('optimizer','validation','healthy_eval','pathological_eval')
 DEVELOPMENT = ('optimizer','validation')
@@ -24,6 +25,7 @@ def write_json(path, value):
 
 def load_config(path):
     config = json.loads(Path(path).read_text(encoding='utf-8'))
+    validate_direction_rule(config)
     if config['preprocessing']['n_markers'] != 105 or config['preprocessing']['n_frames'] != 100:
         raise ValueError('The study pipeline expects 105 facial markers and 100 phase frames')
     if any(float(x) != 0. for x in config['reconstruction'].values()):

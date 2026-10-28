@@ -1,5 +1,8 @@
 """Portable public study settings; CPU static training differs from archived CUDA."""
 import copy
+
+DIRECTION_FLOOR_MM = 1.0
+
 DEFAULT_CONFIG = {'schema_version': 1,
  'preprocessing': {'n_markers': 105,
                    'n_frames': 100,
@@ -52,8 +55,7 @@ DEFAULT_CONFIG = {'schema_version': 1,
  'evaluation': {'fs_hz': 100.0,
                 'lowpass_hz': 8.0,
                 'filter_order': 4,
-                'direction_floor_mm': 1.0,
-                'direction_floors_mm': [0.5, 1.0, 2.0]},
+                'direction_floor_mm': DIRECTION_FLOOR_MM},
  'reconstruction': {'neutral_identity_blend': 0.0,
                     'motion_anchor_strength': 0.0},
  'reproducibility': {'split_seed': 13,
@@ -65,3 +67,12 @@ DEFAULT_CONFIG = {'schema_version': 1,
 
 def default_config():
     return copy.deepcopy(DEFAULT_CONFIG)
+
+
+def validate_direction_rule(config):
+    """Require the article's fixed counter-direction amplitude rule."""
+    evaluation = config['evaluation']
+    floor = evaluation.get('direction_floor_mm')
+    if ('direction_floors_mm' in evaluation or isinstance(floor, bool)
+            or not isinstance(floor, (int, float)) or floor != DIRECTION_FLOOR_MM):
+        raise ValueError('The study uses a fixed 1-mm counter-direction amplitude rule')

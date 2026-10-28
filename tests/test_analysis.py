@@ -8,6 +8,7 @@ import unittest
 import numpy as np
 
 from healthy_reconstruction.analysis import (
+    NUMERICAL_TIE_TOLERANCE_MM,
     POLICIES,
     ScoreRecord,
     aggregate_regional_takes,
@@ -109,11 +110,15 @@ class AUCTests(unittest.TestCase):
         for index, row in enumerate(rows):
             records.append({"sample_id": f"generated_{index}", "participant_id": row.participant_id,
                             "group": row.group, "visit_index": row.visit_index, "task": row.task,
-                            "scores": dict(zip(("varying", "tied"), row.scores)),
+                            "scores": {"tied": row.scores[1], "ae": row.scores[0]},
                             "extra_field": "must_not_be_forwarded"})
         # A second generated take changes the per-unit median before AUC.
-        records.append({**records[0], "sample_id": "another_generated_take", "scores": {"varying": 2., "tied": 7.}})
-        payload = {"schema_version": 1, "methods": ["varying", "tied"], "records": records}
+        records.append({**records[0], "sample_id": "another_generated_take", "scores": {"ae": 2., "tied": 7.}})
+        # Comparison repetitions retain an AE median of one and an IQR of one;
+        # the other method has a different scale and must stay out of follow-up.
+        records.append({**records[2], "sample_id": "comparison_repeat_low", "scores": {"ae": 0., "tied": 100.}})
+        records.append({**records[2], "sample_id": "comparison_repeat_high", "scores": {"ae": 2., "tied": 200.}})
+        payload = {"schema_version": 1, "methods": ["tied", "ae"], "records": records}
         with tempfile.TemporaryDirectory() as directory:
             source, destination = Path(directory) / "private_input.json", Path(directory) / "private_report.json"
             source.write_text(json.dumps(payload), encoding="utf-8")
@@ -125,12 +130,55 @@ class AUCTests(unittest.TestCase):
             self.assertNotIn("must_not_be_forwarded", destination.read_text(encoding="utf-8"))
             self.assertEqual(result["bootstrap"]["iterations"], 16)
             self.assertEqual(result["ordinal_followup"]["status"], "complete_task_visits")
+            self.assertEqual(result["methods"],["tied","ae"])
+            self.assertEqual(np.asarray(result["auc_estimate"]).shape,(4,2,2))
+            self.assertEqual(result["ordinal_followup"]["methods"],["ae"])
+            endpoint=result["ordinal_followup"]["endpoints"][0]
+            self.assertEqual(endpoint["global_delta"],[1.])
+            self.assertEqual(endpoint["task_delta"],[[1.]])
+            self.assertTrue(all(len(r["global_score"])==1 for r in result["ordinal_followup"]["visits"]))
+            variability=result["within_visit_take_variability"]
+            self.assertTrue(all(r["method"]=="ae" and len(r["median"])==1 for r in variability))
+            repeated=next(r for r in variability if r["participant_id"]=="c" and r["visit_index"]==1)
+            self.assertEqual(repeated["median"],[1.])
+            self.assertEqual(repeated["iqr"],[1.])
+            self.assertEqual(result["regional_patterns"]["methods"],["ae"])
             with self.assertRaises(ValueError):
                 analyze_file(source, source, iterations=0)
             payload["records"].append(records[0])
             source.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaises(ValueError):
                 analyze_file(source, destination, iterations=0)
+
+    def test_file_loader_keeps_all_five_cohort_methods_when_followup_is_incomplete(self):
+        from healthy_reconstruction.inference import METHODS
+        records=[]
+        for index,(person,group,visit,task,value) in enumerate([
+                ("reference_person","reference",1,"one",0.),
+                ("reference_person","reference",1,"two",0.),
+                ("comparison_person","comparison",1,"one",1.),
+                ("comparison_person","comparison",1,"two",1.),
+                ("comparison_person","comparison",2,"one",3.)]):
+            records.append({"sample_id":f"generated_{index}","participant_id":person,
+                            "group":group,"visit_index":visit,"task":task,
+                            "scores":{m:value+i for i,m in enumerate(METHODS)}})
+        payload={"schema_version":1,"methods":list(METHODS),"records":records}
+        with tempfile.TemporaryDirectory() as directory:
+            source,destination=Path(directory)/'input.json',Path(directory)/'report.json'
+            source.write_text(json.dumps(payload))
+            result=analyze_file(source,destination,iterations=0,
+                                reference_group="reference",comparison_group="comparison")
+            self.assertEqual(result["methods"],list(METHODS))
+            self.assertEqual(np.asarray(result["auc_estimate"]).shape,(4,3,5))
+            self.assertEqual(len(result["paired_method_differences"]),10)
+            self.assertEqual(result["ordinal_followup"]["status"],"unavailable")
+            self.assertEqual(result["ordinal_followup"]["methods"],["ae"])
+            self.assertTrue(all(r["method"]=="ae" and len(r["median"])==1
+                                for r in result["within_visit_take_variability"]))
+            payload["methods"]=[m for m in METHODS if m!="ae"]
+            source.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(ValueError,'requires the ae'):
+                analyze_file(source,destination,iterations=0)
 
 
 class FollowupTests(unittest.TestCase):
@@ -188,13 +236,28 @@ class RegionalPatternTests(unittest.TestCase):
         self.assertTrue(np.isnan(missing["earliest_visit"]["metric"]))
         self.assertEqual(missing["participant_median"]["metric"], 2.)
 
-    def test_missing_and_margin_eligibility_are_distinct(self):
-        values = np.array([[.1, .02, .3], [.2, np.nan, .4], [0., .05, .1]])
-        result = pattern_frequencies(values, margin=0.)
-        self.assertEqual(result["counter_direction"]["n_eligible"], 2)
-        self.assertEqual(result["all_metrics"]["n_eligible"], 2)
+    def test_fixed_numerical_ties_and_missing_eligibility_are_distinct(self):
+        tie=NUMERICAL_TIE_TOLERANCE_MM
+        above=np.nextafter(tie,np.inf); below=np.nextafter(tie,0.)
+        values=np.array([[tie,tie,tie],[above,above,above],[below,above,above],
+                         [-above,np.nan,above],[np.nan,np.nan,np.nan],[0.,0.,0.]])
+        result = pattern_frequencies(values)
+        self.assertEqual(tie,1e-6)
+        self.assertEqual(result["reduced_movement"]["n_eligible"],5)
+        self.assertEqual(result["reduced_movement"]["n_supporting"],1)
+        self.assertEqual(result["counter_direction"]["n_eligible"],4)
+        self.assertEqual(result["counter_direction"]["n_supporting"],2)
+        self.assertEqual(result["excess_movement"]["n_eligible"],5)
+        self.assertEqual(result["excess_movement"]["n_supporting"],3)
+        self.assertEqual(result["all_metrics"]["n_eligible"],4)
         self.assertEqual(result["all_metrics"]["n_supporting"], 1)
-        self.assertEqual(pattern_frequencies(values, margin=.05)["counter_direction"]["n_supporting"], 0)
+        self.assertEqual(result["all_metrics"]["fraction"],1/4)
+        np.testing.assert_allclose(result["all_metrics"]["wilson_interval"],wilson_interval(1,4))
+        unavailable=pattern_frequencies(np.full((1,3),np.nan))["all_metrics"]
+        self.assertEqual(unavailable["n_eligible"],0)
+        self.assertEqual(unavailable["n_supporting"],0)
+        self.assertTrue(np.isnan(unavailable["fraction"]))
+        self.assertTrue(np.isnan(unavailable["wilson_interval"]).all())
         low, high = wilson_interval(0, 1)
         self.assertAlmostEqual(low, 0., places=12)
         self.assertGreater(high, .5)

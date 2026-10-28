@@ -31,13 +31,16 @@ the functions do not infer physical units or convert them.
 `analyze_file(scores_path, output_path, iterations=5000, seed=0, tasks=None, ...)`
 reads the private prediction command's JSON envelope (`schema_version`, `methods`,
 `records`). It validates unique take identifiers, aggregates take medians, and
-writes a private report containing the AUC analyses, score-omission diagnostic,
-ordinal follow-up, and repetition variation. It does not forward extra input
+writes a private report containing the AUC analyses and score-omission diagnostic
+for all methods. Ordinal follow-up and repetition variation select the `ae` column
+only, matching the paper's descriptive analyses. It does not forward extra input
 fields. Set both group names to the values used by the private input. Methods
 follow the declared header; task order defaults to first appearance unless
 explicitly supplied. Regional patterns require maps and local region assignments
 and cannot be recovered from whole-face scores alone. The file loader explicitly
-marks follow-up unavailable if comparison visits have incomplete task sets.
+requires an `ae` method in the file header and marks follow-up unavailable
+when comparison visits have incomplete task sets. The `cluster_auc` helper
+accepts generic benchmark-only score vectors without an AE column.
 
 ```python
 from healthy_reconstruction.analysis import ScoreRecord, cluster_auc
@@ -90,7 +93,7 @@ number of draws is a computation setting, not a statement about cohort size.
 task estimates and their macro-average become NaN. Returned individual labels and
 estimates are private and should not be committed.
 
-## RQ2: regional patterns, eligibility, and margins
+## RQ2: regional patterns and fixed amplitude eligibility
 
 First compute maps with the inference module using filtered observed/reference
 coordinates and each sequence's own stored neutral. `regional_summary(maps,
@@ -103,10 +106,11 @@ per-take regional values and coverages separately.
 Coverage is the number of finite map entries divided by the entire selected
 frame-by-marker grid. Missing coordinates and ineligible directional frames both
 reduce it. The inference map function excludes counter-direction calculations
-when either observed or reference displacement amplitude falls below the chosen
-direction floor. Unavailable values remain NaN; they never establish normal
-function. The amplitude maps themselves do not depend on this floor. Repeat map
-calculation locally at each prespecified floor to assess that sensitivity.
+when either observed or reconstructed displacement amplitude is below the fixed
+1-mm eligibility floor. Unavailable values remain NaN; they never establish normal
+function. The excess and reduced amplitude maps do not depend on this floor.
+Prediction saves regional map arrays for the AE reconstruction only; comparator
+residuals are retained separately for cohort separation.
 
 `side_contrasts(a, b)` takes a locally assigned generic side A and side B. Its
 default signs are A minus B for `reduced_movement` and `counter_direction`, and B
@@ -117,20 +121,21 @@ subtracting side medians after aggregation. The alternative earliest-visit
 summary uses the smallest recorded visit index, including a missing descriptor
 if it was missing at that visit.
 
-`pattern_frequencies(participants_by_metrics, margin=...)` returns the count
-strictly above the chosen margin among finite eligible contrasts, separately for
-each metric and jointly for all metrics. Numerical ties do not support the
-ordering. Joint eligibility requires every requested descriptor to be finite.
-Wilson intervals describe participant frequencies; they are not estimates of
-diagnostic sensitivity, population prevalence, or treatment efficacy. A contrast
-margin and a directional amplitude floor are different quantities. Margins are
-descriptive unless independently validated as clinical/error thresholds. State
-all tested margins/floors rather than selecting the best one.
+`pattern_frequencies(participants_by_metrics)` counts contrasts strictly above
+`1e-6` mm among finite eligible observations, separately for each descriptor and
+jointly for all descriptors. This fixed tolerance handles numerical ties; it is
+not a minimum meaningful movement difference. Missing descriptors remain missing,
+and joint eligibility requires every requested contrast to be finite. Wilson
+intervals describe participant frequencies, rather than diagnostic sensitivity,
+population prevalence or treatment effectiveness. No additional side-contrast
+margins are evaluated.
 
 ## RQ3: ordinal follow-up and within-visit variation
 
 `summarize_followup` reports each visit's arithmetic mean over the declared task
-scores and first-to-last task/global differences. Every included visit must
+scores and first-to-last task/global differences. The file-based workflow calls
+this mathematical helper with AE scores only and records that method selection
+in the report. Every included visit must
 contain every declared task. Visits are ordered by ordinal index only, and no
 elapsed-time, treatment, or clinical-grade fields are consumed or released.
 Single-visit participants have visit summaries but no first-to-last endpoint.
@@ -139,7 +144,8 @@ residual denotes greater similarity to the selected healthy reference, not
 validated clinical recovery.
 
 `within_visit_variability` consumes private `(participant_id, visit_index, task)`
-keys and `(takes, methods)` arrays. It reports take medians and interquartile
+keys and `(takes, methods)` arrays. The file-based workflow selects only the AE
+column before computing these summaries. It reports take medians and interquartile
 ranges using linear quantiles; single-take IQRs are unavailable. Within-visit
 take dispersion does not estimate between-visit repeatability, a minimal
 detectable change, or uncertainty of a longitudinal change.

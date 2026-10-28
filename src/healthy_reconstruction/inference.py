@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 import numpy as np
 from scipy.signal import butter, filtfilt, savgol_filter
+from .settings import DIRECTION_FLOOR_MM, validate_direction_rule
 EPS = 1e-12
 def interpolate_nan_1d(y: np.ndarray) -> np.ndarray:
     y = np.asarray(y, dtype=float)
@@ -91,9 +92,13 @@ def finite_mean(values: np.ndarray, axis=None) -> np.ndarray:
 def maps_from_filtered(
     observed: np.ndarray, reference: np.ndarray,
     observed_neutral: np.ndarray, reference_neutral: np.ndarray,
-    validity: np.ndarray, direction_floor_mm: float = 1.0,
+    validity: np.ndarray,
 ) -> dict[str, np.ndarray]:
-    """Evaluate equations on filtered coordinates with explicit validity."""
+    """Evaluate AE descriptors with the fixed 1-mm amplitude eligibility rule.
+
+    Both excursion amplitudes must reach 1 mm for counter-direction values.
+    Ineligible and unsupported values remain missing; eligible zeros are kept.
+    """
     observed, reference = np.asarray(observed, float), np.asarray(reference, float)
     valid = np.asarray(validity, bool) & np.isfinite(observed).all(-1) & np.isfinite(reference).all(-1)
     raw = np.linalg.norm(observed - reference, axis=-1)
@@ -104,7 +109,7 @@ def maps_from_filtered(
     a, b = np.linalg.norm(x, axis=-1), np.linalg.norm(h, axis=-1)
     excess, reduced = np.maximum(a - b, 0.0), np.maximum(b - a, 0.0)
     excess[~motion_valid], reduced[~motion_valid] = np.nan, np.nan
-    directional_valid = motion_valid & (a >= direction_floor_mm) & (b >= direction_floor_mm)
+    directional_valid = motion_valid & (a >= DIRECTION_FLOOR_MM) & (b >= DIRECTION_FLOOR_MM)
     opposite = np.divide(-np.sum(x * h, axis=-1), b, out=np.full_like(a, np.nan), where=directional_valid)
     return {
         "raw_error": raw, "excess_movement": excess,
@@ -157,10 +162,11 @@ def _decode(model,checkpoint,values,mask,device):
 
 
 def predict(dataset_root,models_root,output_root,config,device='cpu'):
-    """Predict external records only and write private runtime arrays and scores."""
+    """Write five cohort-comparison scores and AE-only regional maps privately."""
     import torch
     from .data import DEVELOPMENT, load_prepared, load_sample, write_json
     from .train import file_hash
+    validate_direction_rule(config)
     dataset_root,models_root,output_root=Path(dataset_root),Path(models_root),Path(output_root)
     if output_root.exists():
         raise FileExistsError('Prediction output already exists; choose a fresh private directory')
@@ -201,13 +207,17 @@ def predict(dataset_root,models_root,output_root,config,device='cpu'):
         values={}; saved={}
         for method,(positions,own_neutral) in variants.items():
             filtered=filter_sequence(positions,support,ec['fs_hz'],ec['lowpass_hz'],ec['filter_order'])
-            maps=maps_from_filtered(observed,filtered,a['N'],own_neutral,support,ec['direction_floor_mm'])
+            valid=support & np.isfinite(observed).all(-1) & np.isfinite(filtered).all(-1)
+            raw_error=np.linalg.norm(observed-filtered,axis=-1)
+            raw_error[~valid]=np.nan
             # Equal marker contribution after each marker's supported-time mean.
-            values[method]=float(finite_mean(finite_mean(maps['raw_error'],axis=0)))
+            values[method]=float(finite_mean(finite_mean(raw_error,axis=0)))
             if not np.isfinite(values[method]):
                 raise ValueError('Nonfinite common-support trajectory score')
-            for metric,values_array in maps.items():
-                saved[f'{method}__{metric}']=values_array
+            if method=='ae':
+                maps=maps_from_filtered(observed,filtered,a['N'],own_neutral,support)
+                for metric,values_array in maps.items():
+                    saved[f'{method}__{metric}']=values_array
         identity={k:r[k] for k in ('sample_id','participant_id','visit_index','task')}
         scores.append({**identity,'group':'healthy' if r['role']=='healthy_eval' else 'facial_palsy','scores':values})
         np.savez_compressed(output_root/'predictions'/f"{r['sample_id']}.npz",N=a['N'],N_AE=static_prediction,X_AE=motion,
@@ -215,6 +225,7 @@ def predict(dataset_root,models_root,output_root,config,device='cpu'):
     write_json(output_root/'scores.json',{'schema_version':1,'methods':list(METHODS),'records':scores})
     write_json(output_root/'protocol.json',{'schema_version':1,'config':config,'device':str(device),
         'methods':list(METHODS),'primary_reference':'N_AE + X_AE, no blending',
+        'regional_map_methods':['ae'],
         'score':'Mean over markers of supported-time mean Euclidean absolute trajectory error',
         'filter_domain':'100-point normalized movement phase, cutoff 0.08 cycles per normalized sample'})
     return scores

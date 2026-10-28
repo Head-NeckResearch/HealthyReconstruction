@@ -6,9 +6,9 @@ import unittest
 import numpy as np
 from healthy_reconstruction.preprocessing import anchored_representation
 from healthy_reconstruction.geometry import kabsch, world_to_dental
-from healthy_reconstruction.data import grouped_participants, read_manifest, trimmed_mean
+from healthy_reconstruction.data import grouped_participants, load_config, read_manifest, trimmed_mean
 from healthy_reconstruction.inference import maps_from_filtered, prediction_variants, common_scoring_mask, METHODS
-from healthy_reconstruction.settings import default_config
+from healthy_reconstruction.settings import DIRECTION_FLOOR_MM, default_config, validate_direction_rule
 
 
 class PipelineContracts(unittest.TestCase):
@@ -58,12 +58,29 @@ class PipelineContracts(unittest.TestCase):
     def test_maps_keep_own_neutral_and_direction_missing(self):
         observed=np.array([[[2.,0.,0.]],[[.1,0.,0.]]])
         reference=np.array([[[-3.,0.,0.]],[[-.1,0.,0.]]])
-        maps=maps_from_filtered(observed,reference,np.zeros((1,3)),np.zeros((1,3)),np.ones((2,1),bool),1.)
+        maps=maps_from_filtered(observed,reference,np.zeros((1,3)),np.zeros((1,3)),np.ones((2,1),bool))
         self.assertAlmostEqual(maps['counter_direction'][0,0],2.)
         self.assertTrue(np.isnan(maps['counter_direction'][1,0]))
         self.assertAlmostEqual(maps['reduced_movement'][0,0],1.)
-        shifted=maps_from_filtered(observed+7,reference+9,np.full((1,3),7.),np.full((1,3),9.),np.ones((2,1),bool),1.)
+        shifted=maps_from_filtered(observed+7,reference+9,np.full((1,3),7.),np.full((1,3),9.),np.ones((2,1),bool))
         np.testing.assert_allclose(maps['counter_direction'],shifted['counter_direction'],equal_nan=True)
+
+    def test_direction_rule_includes_exact_boundary_and_preserves_missing_support(self):
+        below=np.nextafter(DIRECTION_FLOOR_MM,0.)
+        observed=np.array([[[-1.,0.,0.],[-below,0.,0.],[-1.,0.,0.],
+                            [1.,0.,0.],[-1.,0.,0.],[np.nan,0.,0.]]])
+        reference=np.array([[[1.,0.,0.],[1.,0.,0.],[below,0.,0.],
+                             [1.,0.,0.],[1.,0.,0.],[1.,0.,0.]]])
+        validity=np.array([[True,True,True,True,False,True]])
+        original_observed=observed.copy(); original_validity=validity.copy()
+        maps=maps_from_filtered(observed,reference,np.zeros((6,3)),np.zeros((6,3)),validity)
+        self.assertEqual(DIRECTION_FLOOR_MM,1.)
+        np.testing.assert_array_equal(maps['counter_direction'][0,[0,3]],[1.,0.])
+        self.assertTrue(np.isnan(maps['counter_direction'][0,[1,2,4,5]]).all())
+        self.assertTrue(np.isfinite(maps['reduced_movement'][0,:4]).all())
+        self.assertTrue(np.isnan(maps['raw_error'][0,4:]).all())
+        np.testing.assert_array_equal(observed,original_observed)
+        np.testing.assert_array_equal(validity,original_validity)
 
     def test_final_variants_are_unblended_and_common_support(self):
         neutral=np.ones((2,3)); static=neutral*2
@@ -84,6 +101,25 @@ class PipelineContracts(unittest.TestCase):
         self.assertEqual(c['training']['dynamic']['lambda_acceleration'],0)
         self.assertEqual(c['training']['static']['hidden'],256)
         self.assertEqual(c['training']['dynamic']['latent'],40)
+
+    def test_public_config_enforces_fixed_direction_rule(self):
+        c=default_config()
+        self.assertNotIn('direction_floors_mm',c['evaluation'])
+        self.assertEqual(c['evaluation']['direction_floor_mm'],DIRECTION_FLOOR_MM)
+        example=Path(__file__).resolve().parents[1]/'config'/'paper.example.json'
+        self.assertEqual(load_config(example),c)
+        for floor in (0.,np.nextafter(1.,np.inf),True,None,float('nan')):
+            invalid=default_config(); invalid['evaluation']['direction_floor_mm']=floor
+            with self.subTest(floor=floor), self.assertRaisesRegex(ValueError,'fixed 1-mm'):
+                validate_direction_rule(invalid)
+        legacy=default_config(); legacy['evaluation']['direction_floors_mm']=[1.]
+        with self.assertRaisesRegex(ValueError,'fixed 1-mm'):
+            validate_direction_rule(legacy)
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/'config.json'
+            path.write_text(json.dumps(legacy))
+            with self.assertRaisesRegex(ValueError,'fixed 1-mm'):
+                load_config(path)
 
     def test_masked_nan_loss_and_optimizer_only_normalizer(self):
         import torch

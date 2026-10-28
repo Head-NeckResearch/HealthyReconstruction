@@ -64,12 +64,7 @@
     "fs_hz": 100.0,
     "lowpass_hz": 8.0,
     "filter_order": 4,
-    "direction_floor_mm": 1.0,
-    "direction_floors_mm": [
-      0.5,
-      1.0,
-      2.0
-    ]
+    "direction_floor_mm": 1.0
   },
   "reconstruction": {
     "neutral_identity_blend": 0.0,
